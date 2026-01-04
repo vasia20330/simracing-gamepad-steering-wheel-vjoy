@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <Xinput.h>
 #include <iostream>
 #include <cmath>
@@ -29,7 +29,11 @@ float apply_gamma(float v, float gamma)
     float s = (v >= 0.f) ? 1.f : -1.f;
     return s * powf(fabs(v), gamma);
 }
-LONG normAxis(float v) { v = clamp(v, -1.f, 1.f); return LONG((v + 1.f) * 16383.5f); }
+LONG normAxis(float v)
+{
+    v = clamp(v, -1.f, 1.f);
+    return LONG((v + 1.f) * 16383.5f);
+}
 
 // ================== vJoy typedefs ==================
 typedef BOOL(__cdecl* f_vJoyEnabled)();
@@ -70,7 +74,6 @@ void createDefaultConfig()
     std::cout << "A new config.ini with default settings has been created.\n";
 }
 
-// Проверка существования файла через ifstream
 bool fileExists(const char* filename)
 {
     std::ifstream f(filename);
@@ -80,37 +83,38 @@ bool fileExists(const char* filename)
 // ================== MAIN ==================
 int main()
 {
-    // ---------- Check config.ini ----------
     if (!fileExists(".\\config.ini"))
-    {
         createDefaultConfig();
-    }
 
     // ---------- Load config ----------
     float deadzone = iniFloat("STEERING", "deadzone", 0.06f);
     float gamma = iniFloat("STEERING", "gamma", 1.3f);
-    float alphaWheel = iniFloat("STEERING", "alpha", 0.04f);
+    float alphaWheelBase = iniFloat("STEERING", "alpha", 0.04f);
     float centerSpring = iniFloat("STEERING", "center_spring", 0.12f);
     int maxAngleDeg = iniInt("STEERING", "max_angle", 540);
+
     float alphaPedal = iniFloat("PEDALS", "alpha", 0.3f);
     int sleepMs = iniInt("GENERAL", "update_ms", 5);
-    const float restZone = 0.02f;
 
     float angleLimit = clamp(maxAngleDeg / 900.f, 0.1f, 1.f);
 
-    // ---------- Load vJoy DLL ----------
+    // ---------- Load vJoy ----------
     HMODULE vjoyDll = LoadLibraryA("vJoyInterface.dll");
     if (!vjoyDll) { std::cout << "vJoyInterface.dll not found\n"; return 1; }
 
-    f_vJoyEnabled vJoyEnabled = (f_vJoyEnabled)GetProcAddress(vjoyDll, "vJoyEnabled");
-    f_AcquireVJD AcquireVJD = (f_AcquireVJD)GetProcAddress(vjoyDll, "AcquireVJD");
-    f_RelinquishVJD RelinquishVJD = (f_RelinquishVJD)GetProcAddress(vjoyDll, "RelinquishVJD");
-    f_SetAxis SetAxis = (f_SetAxis)GetProcAddress(vjoyDll, "SetAxis");
-    f_SetBtn SetBtn = (f_SetBtn)GetProcAddress(vjoyDll, "SetBtn");
+    auto vJoyEnabled = (f_vJoyEnabled)GetProcAddress(vjoyDll, "vJoyEnabled");
+    auto AcquireVJD = (f_AcquireVJD)GetProcAddress(vjoyDll, "AcquireVJD");
+    auto RelinquishVJD = (f_RelinquishVJD)GetProcAddress(vjoyDll, "RelinquishVJD");
+    auto SetAxis = (f_SetAxis)GetProcAddress(vjoyDll, "SetAxis");
+    auto SetBtn = (f_SetBtn)GetProcAddress(vjoyDll, "SetBtn");
 
-    if (!vJoyEnabled() || !AcquireVJD(VJOY_ID)) { std::cout << "vJoy not ready\n"; return 1; }
+    if (!vJoyEnabled() || !AcquireVJD(VJOY_ID))
+    {
+        std::cout << "vJoy not ready\n";
+        return 1;
+    }
 
-    // ---------- Initialize state ----------
+    // ---------- State ----------
     float steer = 0.f;
     float gas = -1.f;
     float brake = -1.f;
@@ -136,6 +140,13 @@ int main()
         else
             raw = (fabs(raw) - deadzone) / (1.f - deadzone) * (raw > 0.f ? 1.f : -1.f);
 
+        bool xPressed = (s.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
+        bool bPressed = (s.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
+
+        float alphaWheelCurrent = alphaWheelBase;
+        if (xPressed) alphaWheelCurrent *= 1.5f;
+        if (bPressed) alphaWheelCurrent *= 0.5f;
+
         if (raw == 0.f)
         {
             float k = clamp(fabs(steer) * 2.5f, 0.15f, 1.0f);
@@ -144,19 +155,19 @@ int main()
         else
         {
             float target = apply_gamma(raw, gamma) * angleLimit;
-            steer += (target - steer) * alphaWheel;
+            steer += (target - steer) * alphaWheelCurrent;
         }
 
         steer = clamp(steer, -angleLimit, angleLimit);
         SetAxis(normAxis(steer), VJOY_ID, HID_X);
 
-        // ----- GAS (RT) -----
+        // ----- GAS -----
         float rawGas = s.Gamepad.bRightTrigger / 255.f;
         gas += ((rawGas * 2.f - 1.f) - gas) * alphaPedal;
         gas = clamp(gas, -1.f, 1.f);
         SetAxis(normAxis(gas), VJOY_ID, HID_Y);
 
-        // ----- BRAKE (LT) -----
+        // ----- BRAKE -----
         float rawBrake = s.Gamepad.bLeftTrigger / 255.f;
         brake += ((rawBrake * 2.f - 1.f) - brake) * alphaPedal;
         brake = clamp(brake, -1.f, 1.f);
